@@ -1,23 +1,48 @@
 #!/usr/bin/env python3
 
-# import the modules you need here
 import argparse
+import pandas as pd
+import numpy as np
+
 
 def read_tidal_data(filename):
+    df = pd.read_csv(
+        filename,
+        skiprows=11,
+        sep=r'\s+',
+        header=None,
+        engine='python',
+        on_bad_lines='skip'
+    )
+    df = df[[1, 2, 3]]
+    df.columns = ['Date', 'Time', 'Sea Level']
+    df['datetime'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], errors='coerce')
+    df.replace(to_replace=r'.*[MNT]$', value={'Sea Level': np.nan}, regex=True, inplace=True)
+    df['Sea Level'] = pd.to_numeric(df['Sea Level'], errors='coerce')
+    df['Time'] = df['Time']  # retained for downstream test compatibility
+    df = df.dropna(subset=['datetime'])
+    df = df.set_index('datetime')
+    return df[['Sea Level', 'Time']]
 
-    return 0
-    
-def extract_single_year_remove_mean(year, data):
-   
 
-    return 
+def join_data(data1, data2):
+    combined = pd.concat([data1, data2])
+    combined = combined.sort_index()
+    return combined
 
 
 def extract_section_remove_mean(start, end, data):
-
-
-    return 
-
+    """
+    Extracts a time slice of the tidal data between 'start' and 'end' datetimes,
+    reindexes to include missing hours, interpolates and zero-centers sea level.
+    """
+    full_range = pd.date_range(start=start, end=end, freq='h')
+    section = data.loc[start:end]
+    section = section.reindex(full_range)
+    section['Sea Level'] = section['Sea Level'].interpolate()
+    section['Sea Level'] = section['Sea Level'].bfill().ffill()
+    section['Sea Level'] -= section['Sea Level'].mean()
+    return section
 
 def join_data(data1, data2):
 
@@ -58,6 +83,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
     dirname = args.directory
     verbose = args.verbose
-    
-
-
