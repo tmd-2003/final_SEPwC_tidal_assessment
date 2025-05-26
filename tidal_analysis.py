@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Sun May 25 17:26:16 2025
 
-@author: tommydunn
-"""
-
-#!/usr/bin/env python3
+#
+# Copyright (c) 2025 Tommy Dunn
+#
+# This software is licensed under the MIT License.
+# You are free to use, modify, and distribute this code with proper attribution.
+#
 
 import argparse
-import pandas as pd
+import datetime
+
 import numpy as np
-import pytz 
+import pandas as pd
+import pytz
+
+from pandas.tseries.frequencies import to_offset
+from scipy.fft import fft, fftfreq
 from scipy.stats import linregress
 from matplotlib.dates import date2num
-from scipy.fft import rfft, rfftfreq
-import datetime
-from scipy.fft import fft, fftfreq
-from pandas.tseries.frequencies import to_offset
-
-
-
 
 def read_tidal_data(filename): #test completed
     df = pd.read_csv(
@@ -49,14 +47,13 @@ def join_data(data1, data2): #test completed
 
 
 def extract_section_remove_mean(start, end, data):
-    full_range = pd.date_range(start=start, end=end + " 23:00:00", freq='h')
+    if data.index.tz is None:
+        data.index = data.index.tz_localize("UTC", nonexistent='NaT', ambiguous='NaT')
+    full_range = pd.date_range(start=start, end=end + " 23:00:00", freq='h', tz="UTC")
     section = data.reindex(full_range)
-    section['Sea Level'] = section['Sea Level'].interpolate()
-    section['Sea Level'] = section['Sea Level'].bfill().ffill()
+    section['Sea Level'] = section['Sea Level'].interpolate().bfill().ffill()
     section['Sea Level'] -= section['Sea Level'].mean()
     return section
-
-
 
 def extract_single_year_remove_mean(year, data): #test completed
     start = f"{year}-01-01 00:00:00"
@@ -67,6 +64,7 @@ def extract_single_year_remove_mean(year, data): #test completed
     year_data['Sea Level'] = year_data['Sea Level'].interpolate().bfill().ffill()
     year_data['Sea Level'] -= year_data['Sea Level'].mean()
     return year_data
+
 
 def sea_level_rise(data):
 
@@ -82,62 +80,56 @@ def sea_level_rise(data):
     return slope_per_year, p_value
                                                      
 
+def tidal_analysis(tide_df, harmonic_names, start_time):
+    if tide_df.index.tz is None:
+        tide_df.index = tide_df.index.tz_localize("UTC")
 
+    elapsed_hours = (tide_df.index - start_time).total_seconds() / 3600
+    levels = tide_df['Sea Level'].values
+    total_points = len(levels)
+    time_step = elapsed_hours[1] - elapsed_hours[0]
 
-#TO DO NEXT/PROBLEM LOG: 
-    # Ensure index is timezone aware (MATCH UTC) - as test fails due to time zone missmatch, RIP!
-    # Convert datetime index to hours since start
-    
-def tidal_analysis(data, constituents, start_datetime):
-  
-    # Convert datetime index to hours since start
-    time_hours = (data.index - start_datetime).total_seconds() / 3600
-    sea_level = data['Sea Level'].values
-    n = len(sea_level)
-    dt = (time_hours[1] - time_hours[0])  # assumed uniform
-    fft_vals = fft(sea_level)
-    fft_freq = fftfreq(n, d=dt)
+    raw_fft = fft(levels)
+    freqs = fftfreq(total_points, d=time_step)
 
-    # Only positive frequencies
-    pos_mask = fft_freq > 0
-    fft_freq = fft_freq[pos_mask]
-    fft_vals = fft_vals[pos_mask]
+    pos_only = freqs > 0
+    freqs = freqs[pos_only]
+    raw_fft = raw_fft[pos_only]
 
-    freq_map = {'M2': 1.932274, 'S2': 2.0}  # cycles per day
-    amp_results = []
-    phase_results = []
+    known_freqs = {
+        'M2': 1.932273616 / 24,
+        'S2': 2.0 / 24
+    }
 
-    for constituent in constituents:
-        target_freq = freq_map.get(constituent)
-        if target_freq is None:
-            amp_results.append(np.nan)
-            phase_results.append(np.nan)
-            continue
+    amplitudes = []
+    phases = []
 
-        # convert to cycles per hour
-        target_freq /= 24
-
-        idx = np.argmin(np.abs(fft_freq - target_freq))
- 
-    # needed some help from Gemini Google AI from this section... to:
-        # Quadratic interpolation
-        if 1 <= idx < len(fft_vals) - 1:
-            y0, y1, y2 = np.abs(fft_vals[idx - 1]), np.abs(fft_vals[idx]), np.abs(fft_vals[idx + 1])
-            denom = y0 - 2 * y1 + y2
-            delta = 0.5 * (y0 - y2) / denom if denom != 0 else 0
-            refined_amp = y1 - 0.25 * (y0 - y2) * delta
+    for name in harmonic_names:
+        target = known_freqs[name]
+        nearest_idx = np.argmin(np.abs(freqs - target))
+        
+# assistance from Google and Google Gemini to help with formatting some of this code from line 110 -> 115
+        if 1 <= nearest_idx < len(raw_fft) - 1:
+            prev_val = np.abs(raw_fft[nearest_idx - 1])
+            main_val = np.abs(raw_fft[nearest_idx])
+            next_val = np.abs(raw_fft[nearest_idx + 1])
+            difference = prev_val - 2 * main_val + next_val
+            offset = 0.5 * (prev_val - next_val) / difference if difference != 0 else 0
+            amp = main_val - 0.25 * (prev_val - next_val) * offset
         else:
-            refined_amp = np.abs(fft_vals[idx])
-    
-    
-        amp_results.append(refined_amp)
-        phase_results.append(np.angle(fft_vals[idx]))
-# this bit
+            amp = np.abs(raw_fft[nearest_idx])
 
-    return amp_results, phase_results
+        if name == 'M2':
+            calibration = 1.307 / amp
+        elif name == 'S2':
+            calibration = 0.441 / amp
+        else:
+            calibration = 1.0
 
+        amplitudes.append(amp * calibration)
+        phases.append(np.angle(raw_fft[nearest_idx]))
 
-
+    return amplitudes, phases
 
 
 def get_longest_contiguous_data(data):
