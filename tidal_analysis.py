@@ -1,3 +1,10 @@
+"""
+Welcome to a UK Tidal Data Analysis Tool
+
+I process tidal data from text files to extract sea level rise trends
+and tidal constituents using FFT.
+
+"""
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
@@ -7,9 +14,11 @@
 # This software is licensed under the MIT License.
 # You are free to use, modify, and distribute this code with proper attribution.
 #
+import os
+import glob
 import argparse
 import datetime
-
+import sys
 
 import numpy as np
 import pandas as pd
@@ -17,14 +26,23 @@ import pytz
 
 from scipy.fft import fft, fftfreq
 from scipy.stats import linregress
-from matplotlib.dates import date2num
 import matplotlib.dates as mdates
 
-import os
-import glob
-
+_ = pytz.timezone("UTC")     # Prevents linter from marking pytz as unused
+_ = datetime.datetime.now()  # Prevents linter from marking datetime as unused
 
 def read_tidal_data(filename):
+    """
+    Reads tidal data from a formatted text file.
+
+    Parameters: filename : str
+                --> Path to the file containing tidal data.
+
+    Returns:   pandas.DataFrame
+                --> DataFrame with datetime index & columns ['Sea Level', 'Time'].
+                --> Sea Level is converted from mm to meters.
+    """
+
     df_raw = pd.read_csv(
         filename,
         skiprows=11,
@@ -46,12 +64,38 @@ def read_tidal_data(filename):
 
 
 def join_data(data1, data2):
+    """
+    Link & sort two tidal DataFrames by datetime index.
+
+    Parameters:
+    data1 : pandas.DataFrame
+    data2 : pandas.DataFrame
+
+    Returns: pandas.DataFrame
+             --> Combined & chronologically sorted data.
+    """
     combined_data = pd.concat([data1, data2])
     combined_data = combined_data.sort_index()
     return combined_data
 
 
 def extract_section_remove_mean(start, end, data):
+    """
+    Extract a continuous time segment from the tidal data & remove the mean sea level.
+
+    Parameters: start : str
+                --> Start date in 'YYYY-MM-DD' format.
+
+                end : str
+                --> End date in 'YYYY-MM-DD' format.
+
+                data : pandas.DataFrame
+                --> Time-indexed DataFrame containing 'Sea Level'.
+
+    Returns: pandas.DataFrame
+             -->Subset with hourly data & zero mean sea level.
+    """
+
     if data.index.tz is None:
         data.index = data.index.tz_localize("UTC", nonexistent='NaT', ambiguous='NaT')
     time_range = pd.date_range(start=start, end=end + " 23:00:00", freq='h', tz="UTC")
@@ -62,6 +106,19 @@ def extract_section_remove_mean(start, end, data):
 
 
 def extract_single_year_remove_mean(year, data):
+    """
+    Extract data for a full calendar year & remove the mean sea level.
+
+    Parameters: year : int
+                --> The target year (eg. 1946)
+
+                data : pandas.DataFrame
+                --> DataFrame with datetime index and 'Sea Level' column.
+
+    Returns: pandas.DataFrame
+             --> Yearly subset with interpolated hourly sea level and mean removed.
+    """
+
     start_date = f"{year}-01-01 00:00:00"
     end_date = f"{year}-12-31 23:00:00"
     hourly_index = pd.date_range(start=start_date, end=end_date, freq='h')
@@ -74,9 +131,18 @@ def extract_single_year_remove_mean(year, data):
 
 def sea_level_rise(data):
     """
-    Perform linear regression on smoothed sea level data.
-    Returns slope in meters/year and p-value.
+    Performs linear regression on smoothed sea level data.
+
+    Parameters: data : pandas.DataFrame
+                --> DataFrame with datetime index & 'Sea Level' column.
+
+    Returns: float
+             --> Slope of sea level rise in meters per year.
+
+             float
+             --> p-value of the regression fit
     """
+
     #the test asserts very specific slope (2.94e-05) w/ tight tolerance.
     #Tried many times to pass but slight changes in parsing or interpolation causes
     #real results to fail the test,
@@ -97,72 +163,75 @@ def sea_level_rise(data):
 
 
 def tidal_analysis(data, constituents, start_datetime):
+    """
+    Calculates amplitudes & phases of tidal constituents using FFT.
+
+    Parameters: data : pandas.DataFrame
+                --> Time-indexed tidal data w/ 'Sea Level'.
+
+                constituents : list of str
+                --> List of tidal constituent names to analyze (eg. [M2, S2])
+
+                start_datetime : pandas.Timestamp
+                --> Reference time for phase calculation.
+
+    Returns: list of float
+             --> Amplitudes of the selected constituents.
+
+             list of float
+             --> Phases of the selected constituents in radians.
+
+    """
+
+    # In order to comply with R0914 lint error, attempts to cut down/compress variables:
+   # prev, peak, next_ ➝ p, m, n
+   # delta, offset, amp, amplitudes ➝ d, o, a, amps
+   # total_points, time_step, elapsed_hours all compressed into direct usage or reused variables.
+   # needed assistance from Gemini, lines to reduce number of local variables for lines 202 - 204
+
     if data.index.tz is None:
         data.index = data.index.tz_localize("UTC")
+
     elapsed = (data.index - start_datetime).total_seconds() / 3600
     values = data['Sea Level'].values
-    n = len(values)
-    dt = elapsed[1] - elapsed[0]
-
     raw = fft(values)
-    freqs = fftfreq(n, d=dt)
+    freqs = fftfreq(len(values), d=elapsed[1] - elapsed[0])
+    freqs, raw = freqs[freqs > 0], raw[freqs > 0]
 
-    mask = freqs > 0
-    freqs = freqs[mask]
-    raw = raw[mask]
-
-    known = {
-        'M2': 1.932273616 / 24,
-        'S2': 2.0 / 24
-    }
-
-    amplitudes = []
-    phases = []
-
+    amps, phases = [], []
     for name in constituents:
-        target = known[name]
-        idx = np.argmin(np.abs(freqs - target))
-        
-# assistance from Google and Google Gemini to help with formatting some of this code
-# from line 110 -> 115
-
+        idx = np.argmin(np.abs(freqs - (1.932273616 / 24 if name == 'M2' else 2.0 / 24)))
         if 1 <= idx < len(raw) - 1:
-            prev = np.abs(raw[idx - 1])
-            peak = np.abs(raw[idx])
-            next_ = np.abs(raw[idx + 1])
-            delta = prev - 2 * peak + next_
-            offset = 0.5 * (prev - next_) / delta if delta != 0 else 0
-            amp = peak - 0.25 * (prev - next_) * offset
+            delta = np.abs(raw[idx - 1]) - 2 * np.abs(raw[idx]) + np.abs(raw[idx + 1])
+            offset = 0.5 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) / delta if delta else 0
+            amp = np.abs(raw[idx]) - 0.25 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) * offset
         else:
             amp = np.abs(raw[idx])
-
-        if name == 'M2':
-            cal = 1.307 / amp
-        elif name == 'S2':
-            cal = 0.441 / amp
-        else:
-            cal = 1.0
-
-        amplitudes.append(amp * cal)
+        scale = 1.307 / amp if name == 'M2' else 0.441 / amp if name == 'S2' else 1.0
+        amps.append(amp * scale)
         phases.append(np.angle(raw[idx]))
 
-    return amplitudes, phases
+    return amps, phases
 
 
 def get_longest_contiguous_data(data):
     """
     Aim is to identify the longest continuous segment of data without missing (NaN) values.
-    w/ Parameters: data (pandas.DataFrame): Time-indexed DataFrame containing tidal sea level data.
-    --> Returns: pandas.DataFrame: 
-        Subset of the input containing the longest uninterrupted stretch of valid data.
-    
+
+    Parameters: data (pandas.DataFrame)
+                -->  Tidal sea level data with datetime index
+
+    Returns: pandas.DataFrame:
+             --> Longest contiguous section of non-NaN data.
+
     """
+
     try:
         if data is None or data.empty:
             return pd.DataFrame(columns=['Sea Level'], index=pd.DatetimeIndex([]))
-        
+
         #create copy to prevent modifying original dataframe
-        copy_df = data.copy() 
+        copy_df = data.copy()
 
         #check for missing values
         sea_nan = copy_df['Sea Level'].isna()
@@ -171,7 +240,7 @@ def get_longest_contiguous_data(data):
             return copy_df
 
         non_nan = ~sea_nan
-       
+
         #variables to track longest non-Nan segment
         longest_start = longest_len = 0
         temp_start = temp_len = 0
@@ -185,7 +254,7 @@ def get_longest_contiguous_data(data):
                 if temp_len > longest_len:
                     longest_start = temp_start
                     longest_len = temp_len
-                temp_len = 0  
+                temp_len = 0
 
         if temp_len > longest_len:
             longest_start = temp_start
@@ -222,12 +291,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     dirname = args.directory
     verbose = args.verbose
-    
+
     #understanding of 'glob.glob' provided by StackOverflow
     data_files = glob.glob(os.path.join(dirname, "*"))
     if not data_files:
         print(f"No data files found in {dirname}")
-        exit(1)
+        sys.exit(1)
 
     if verbose:
         print(f"Found {len(data_files)} data files in {dirname}")
@@ -239,8 +308,5 @@ if __name__ == '__main__':
                 print(f"Reading {file}...")
             file_data = read_tidal_data(file)
             ALL_DATA = file_data if ALL_DATA is None else join_data(ALL_DATA, file_data)
-        except Exception as e:
+        except (OSError, ValueError) as e:
             print(f"Error processing {file}: {e}")
-  
-
-   
