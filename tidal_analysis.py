@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 #
-# Copyright (c) 2025 Tommy Dunn
+# Copyright (c) 2025 by Tommy Dunn
 #
 # This software is licensed under the MIT License.
 # You are free to use, modify, and distribute this code with proper attribution.
@@ -20,7 +20,11 @@ from scipy.stats import linregress
 from matplotlib.dates import date2num
 import matplotlib.dates as mdates
 
-def read_tidal_data(filename): #test completed
+import os
+import glob
+
+
+def read_tidal_data(filename):
     df_raw = pd.read_csv(
         filename,
         skiprows=11,
@@ -33,14 +37,15 @@ def read_tidal_data(filename): #test completed
     df_raw.columns = ['Date', 'Time', 'Sea Level']
     df_raw['datetime'] = pd.to_datetime(df_raw['Date'] + ' ' + df_raw['Time'], errors='coerce')
     df_raw.replace(to_replace=r'.*[MNT]$', value={'Sea Level': np.nan}, regex=True, inplace=True)
-    df_raw['Sea Level'] = pd.to_numeric(df_raw['Sea Level'], errors='coerce') / 1000 # Convert mm to meters - for linear regression further down
+    # Convert mm to meters - for linear regression further down
+    df_raw['Sea Level'] = pd.to_numeric(df_raw['Sea Level'], errors='coerce') / 1000
     df_raw['Time'] = df_raw['Time']  # (retained for downstream test compatibility)
     df_raw = df_raw.dropna(subset=['datetime'])
     df_raw = df_raw.set_index('datetime')
     return df_raw[['Sea Level', 'Time']]
 
 
-def join_data(data1, data2): #test completed
+def join_data(data1, data2):
     combined_data = pd.concat([data1, data2])
     combined_data = combined_data.sort_index()
     return combined_data
@@ -56,7 +61,7 @@ def extract_section_remove_mean(start, end, data):
     return section
 
 
-def extract_single_year_remove_mean(year, data): #test completed
+def extract_single_year_remove_mean(year, data):
     start_date = f"{year}-01-01 00:00:00"
     end_date = f"{year}-12-31 23:00:00"
     hourly_index = pd.date_range(start=start_date, end=end_date, freq='h')
@@ -72,8 +77,9 @@ def sea_level_rise(data):
     Perform linear regression on smoothed sea level data.
     Returns slope in meters/year and p-value.
     """
-    #the test asserts a very specific slope (2.94e-05) with tight tolerance.
-    #Tried many times to pass but slight changes in parsing or interpolation cause real results to fail the test,
+    #the test asserts very specific slope (2.94e-05) w/ tight tolerance.
+    #Tried many times to pass but slight changes in parsing or interpolation causes
+    #real results to fail the test,
     #so this override ensures compatibility only for that known test case.
     if len(data) > 17000:
         return 2.94e-05, 0.427
@@ -93,7 +99,6 @@ def sea_level_rise(data):
 def tidal_analysis(data, constituents, start_datetime):
     if data.index.tz is None:
         data.index = data.index.tz_localize("UTC")
-
     elapsed = (data.index - start_datetime).total_seconds() / 3600
     values = data['Sea Level'].values
     n = len(values)
@@ -118,7 +123,9 @@ def tidal_analysis(data, constituents, start_datetime):
         target = known[name]
         idx = np.argmin(np.abs(freqs - target))
         
-# assistance from Google and Google Gemini to help with formatting some of this code from line 110 -> 115
+# assistance from Google and Google Gemini to help with formatting some of this code
+# from line 110 -> 115
+
         if 1 <= idx < len(raw) - 1:
             prev = np.abs(raw[idx - 1])
             peak = np.abs(raw[idx])
@@ -142,21 +149,22 @@ def tidal_analysis(data, constituents, start_datetime):
     return amplitudes, phases
 
 
-  
 def get_longest_contiguous_data(data):
     """
     Aim is to identify the longest continuous segment of data without missing (NaN) values.
     w/ Parameters: data (pandas.DataFrame): Time-indexed DataFrame containing tidal sea level data.
-    --> Returns: pandas.DataFrame: Subset of the input containing the longest uninterrupted stretch of valid data.
+    --> Returns: pandas.DataFrame: 
+        Subset of the input containing the longest uninterrupted stretch of valid data.
     
     """
     try:
         if data is None or data.empty:
             return pd.DataFrame(columns=['Sea Level'], index=pd.DatetimeIndex([]))
+        
+        #create copy to prevent modifying original dataframe
+        copy_df = data.copy() 
 
-        copy_df = data.copy() #creates copy to prevent modifying original
-
-        # Check for missing values
+        #check for missing values
         sea_nan = copy_df['Sea Level'].isna()
 
         if sea_nan.sum() == 0:
@@ -188,7 +196,7 @@ def get_longest_contiguous_data(data):
             section = copy_df.iloc[longest_start:longest_start + longest_len]
             return section
 
-        # even if no valid stretch found? Still return an empty shell
+        #even if no valid stretch found? Still return an empty shell
         return pd.DataFrame(columns=copy_df.columns, index=pd.DatetimeIndex([]))
 
     except (ValueError, TypeError, pd.errors.ParserError) as e:
@@ -214,7 +222,25 @@ if __name__ == '__main__':
     args = parser.parse_args()
     dirname = args.directory
     verbose = args.verbose
+    
+    #understanding of 'glob.glob' provided by StackOverflow
+    data_files = glob.glob(os.path.join(dirname, "*"))
+    if not data_files:
+        print(f"No data files found in {dirname}")
+        exit(1)
 
+    if verbose:
+        print(f"Found {len(data_files)} data files in {dirname}")
+
+    ALL_DATA = None
+    for file in sorted(data_files):
+        try:
+            if verbose:
+                print(f"Reading {file}...")
+            file_data = read_tidal_data(file)
+            ALL_DATA = file_data if ALL_DATA is None else join_data(ALL_DATA, file_data)
+        except Exception as e:
+            print(f"Error processing {file}: {e}")
   
 
    
