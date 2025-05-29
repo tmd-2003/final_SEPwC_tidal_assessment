@@ -9,11 +9,12 @@ from dataclasses import asdict
 import pandas as pd
 import numpy as np
 
+
 class TestTidalAnalysis():
-    
+
     def test_reading_data(self):
         tidal_file = "data/1947ABE.txt"
-        
+
         data = read_tidal_data(tidal_file)
         assert "Sea Level" in data.columns
         assert type(data.index) == pd.core.indexes.datetimes.DatetimeIndex
@@ -24,12 +25,12 @@ class TestTidalAnalysis():
         # check for M, N and T data; should be NaN
         assert data['Sea Level'].isnull().any()
         assert pd.api.types.is_float_dtype(data['Sea Level'])
-        
+
         # check for error on unknown file
         with pytest.raises(FileNotFoundError):
             read_tidal_data("missing_file.dat")
 
-    
+
     def test_join_data(self):
 
         gauge_files = ['data/1946ABE.txt', 'data/1947ABE.txt']
@@ -49,16 +50,16 @@ class TestTidalAnalysis():
         # check you get a fail if two incompatible dfs are given
         data2.drop(columns=["Sea Level","Time"], inplace=True)
         data = join_data(data1, data2)
-        
+
 
     def test_extract_year(self):
-        
+
         gauge_files = ['data/1946ABE.txt', 'data/1947ABE.txt']
 
         data1 = read_tidal_data(gauge_files[1])
         data2 = read_tidal_data(gauge_files[0])
         data = join_data(data1, data2)
-        
+
         year1947 = extract_single_year_remove_mean("1947",data)
         assert "Sea Level" in year1947.columns
         assert type(year1947.index) == pd.core.indexes.datetimes.DatetimeIndex
@@ -77,7 +78,7 @@ class TestTidalAnalysis():
         data1 = read_tidal_data(gauge_files[1])
         data2 = read_tidal_data(gauge_files[0])
         data = join_data(data1, data2)
-        
+
         year1946_47 = extract_section_remove_mean("19461215", "19470310", data)
         assert "Sea Level" in year1946_47.columns
         assert type(year1946_47.index) == pd.core.indexes.datetimes.DatetimeIndex
@@ -125,10 +126,10 @@ class TestTidalAnalysis():
         data = join_data(data1, data2)
 
         slope, p_value = sea_level_rise(data)
-        
+
         assert slope == pytest.approx(2.94e-05,abs=1e-7)
         assert p_value == pytest.approx(0.427,abs=0.1)
-        
+
 
     def test_lint(self):
         files =  ["tidal_analysis.py"]
@@ -147,7 +148,7 @@ class TestTidalAnalysis():
         print("Score: " + str(score))
         line_format = "{path}:{line}:{column}: {msg_id}: {msg} ({symbol})"
         for error in report.messages:
-            print(line_format.format(**asdict(error)))   
+            print(line_format.format(**asdict(error)))
 
         assert nErrors < 500
         assert nErrors < 400
