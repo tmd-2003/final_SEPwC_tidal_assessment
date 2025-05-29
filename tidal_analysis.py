@@ -56,6 +56,8 @@ def read_tidal_data(filename):
     if not filename.lower().endswith((".txt", ".dat", ".csv")):
         raise ValueError("Skipped non-data file")
 
+    print(f"Reading {os.path.basename(filename)}...")
+
     with open(filename, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
@@ -342,6 +344,9 @@ def prompt_and_plot_graph(base_dir_for_graphs):
     if response != "y":
         return
 
+    # ANSI escape codes used for terminal coloring
+    print("\033[92mSearching for station data...\033[0m")
+
     # Gather all files recursively
     all_files = [
         os.path.join(root, file)
@@ -364,6 +369,8 @@ def prompt_and_plot_graph(base_dir_for_graphs):
         print(f"No files found for station: {station_name}")
         return
 
+    print("\033[92mReading and combining station data...\033[0m")
+
     station_df = pd.DataFrame()
     for station_file in station_files:
         if not station_file.lower().endswith((".txt", ".dat", ".csv")):
@@ -377,6 +384,8 @@ def prompt_and_plot_graph(base_dir_for_graphs):
     if station_df.empty:
         print("No valid data found to plot.")
         return
+
+    print("\033[92mGenerating your requested graph...\033[0m")
 
     # Resample to annual mean sea level
     annual = station_df["Sea Level"].resample("A").mean().dropna()
@@ -395,7 +404,7 @@ def prompt_and_plot_graph(base_dir_for_graphs):
 
     plt.savefig(output_path)
     plt.close()
-    print(f"Graph saved to: {output_path}")
+    print(f"\033[92mGraph saved to: {output_path}\033[0m")
 
 
 if __name__ == "__main__":
@@ -428,8 +437,6 @@ if __name__ == "__main__":
     ALL_TIDAL_DATA = None
     for file in sorted(data_files):
         try:
-            if verbose:
-                print(f"Reading {file}...")
             file_data = read_tidal_data(file)
             ALL_TIDAL_DATA = (
                 file_data
