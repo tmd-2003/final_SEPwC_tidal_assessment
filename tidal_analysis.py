@@ -12,7 +12,7 @@ and tidal constituents using FFT.
 # Copyright (c) 2025 by Tommy Dunn
 #
 # This software is licensed under the MIT License.
-# You are free to use, modify, and distribute this code with proper attribution.
+# You are free to use, modify and distribute this code with proper attribution.
 #
 import os
 import glob
@@ -28,39 +28,70 @@ from scipy.fft import fft, fftfreq
 from scipy.stats import linregress
 import matplotlib.dates as mdates
 
-_ = pytz.timezone("UTC")     # Prevents linter from marking pytz as unused
-_ = datetime.datetime.now()  # Prevents linter from marking datetime as unused
+_ = pytz.timezone("UTC")     #prevents linter from marking pytz as unused
+_ = datetime.datetime.now()  #prevents linter from marking datetime as unused
 
 def read_tidal_data(filename):
     """
     Reads tidal data from a formatted text file.
 
-    Parameters: filename : str
-                --> Path to the file containing tidal data.
+    Parameters:
+        filename : str
+        --> Path to the file containing tidal data.
 
-    Returns:   pandas.DataFrame
-                --> DataFrame with datetime index & columns ['Sea Level', 'Time'].
-                --> Sea Level is converted from mm to meters.
+    Returns:
+        pandas.DataFrame
+        --> DataFrame with datetime index & columns ['Sea Level', 'Time'].
+        --> Sea Level is converted from mm to meters.
     """
+
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"No such file or directory: '{filename}'")
+
+    if not filename.lower().endswith(('.txt', '.dat', '.csv')):
+        raise ValueError("Skipped non-data file")
+
+    with open(filename, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    data_start_idx = 11
+    for idx, line in enumerate(lines):
+        if 'Date' in line and 'Time' in line:
+            data_start_idx = idx + 2
+            break
 
     df_raw = pd.read_csv(
         filename,
-        skiprows=11,
+        skiprows=data_start_idx,
         sep=r'\s+',
         header=None,
         engine='python',
         on_bad_lines='skip'
     )
+
+    if df_raw.shape[1] < 3:
+        raise ValueError("File does not contain expected columns")
+
     df_raw = df_raw[[1, 2, 3]]
     df_raw.columns = ['Date', 'Time', 'Sea Level']
-    df_raw['datetime'] = pd.to_datetime(df_raw['Date'] + ' ' + df_raw['Time'], errors='coerce')
-    df_raw.replace(to_replace=r'.*[MNT]$', value={'Sea Level': np.nan}, regex=True, inplace=True)
-    # Convert mm to meters - for linear regression further down
+
+    df_raw['datetime'] = pd.to_datetime(
+        df_raw['Date'] + ' ' + df_raw['Time'],
+        format='%Y/%m/%d %H:%M:%S',
+        errors='coerce'
+    )
+
+    df_raw['Sea Level'] = df_raw['Sea Level'].astype(str).replace(
+        to_replace=r'.*[MNT]$', value=np.nan, regex=True
+    )
+    df_raw = df_raw.infer_objects(copy=False)
     df_raw['Sea Level'] = pd.to_numeric(df_raw['Sea Level'], errors='coerce') / 1000
-    df_raw['Time'] = df_raw['Time']  # (retained for downstream test compatibility)
+
     df_raw = df_raw.dropna(subset=['datetime'])
     df_raw = df_raw.set_index('datetime')
+
     return df_raw[['Sea Level', 'Time']]
+
 
 
 def join_data(data1, data2):
@@ -74,9 +105,13 @@ def join_data(data1, data2):
     Returns: pandas.DataFrame
              --> Combined & chronologically sorted data.
     """
+    if data1.empty:
+        return data2
+    if data2.empty:
+        return data1
+
     combined_data = pd.concat([data1, data2])
-    combined_data = combined_data.sort_index()
-    return combined_data
+    return combined_data.sort_index()
 
 
 def extract_section_remove_mean(start, end, data):
@@ -187,7 +222,7 @@ def tidal_analysis(data, constituents, start_datetime):
    # prev, peak, next_ ➝ p, m, n
    # delta, offset, amp, amplitudes ➝ d, o, a, amps
    # total_points, time_step, elapsed_hours all compressed into direct usage or reused variables.
-   # needed assistance from Gemini, lines to reduce number of local variables for lines 202 - 204
+   # needed assistance from Gemini, to reduce number of local variables for lines 235 - 247
 
     if data.index.tz is None:
         data.index = data.index.tz_localize("UTC")
@@ -212,7 +247,6 @@ def tidal_analysis(data, constituents, start_datetime):
         phases.append(np.angle(raw[idx]))
 
     return amps, phases
-
 
 def get_longest_contiguous_data(data):
     """
@@ -274,32 +308,31 @@ def get_longest_contiguous_data(data):
 
 
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser(
-                     prog="UK Tidal analysis",
-                     description="Calculate tidal constiuents and RSL from tide gauge data",
-                     epilog="Copyright 2024, Jon Hill"
-                     )
+        prog="UK Tidal analysis",
+        description="Calculate tidal constituents and RSL from tide gauge data",
+        epilog="Copyright 2024, Jon Hill"
+    )
 
-    parser.add_argument("directory",
-                    help="the directory containing txt files with data")
-    parser.add_argument('-v', '--verbose',
-                    action='store_true',
-                    default=False,
-                    help="Print progress")
+    parser.add_argument(
+        "directory",
+        help="The directory containing txt files with data"
+        )
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        default=False, help="Print progress")
 
     args = parser.parse_args()
-    dirname = args.directory
+    dir_input = args.directory
     verbose = args.verbose
 
-    #understanding of 'glob.glob' provided by StackOverflow
-    data_files = glob.glob(os.path.join(dirname, "*"))
+#below contains aggressively shorterned lines, using brackets, to adhere to C031 lint warning
+    data_files = glob.glob(os.path.join(dir_input, "*"))
     if not data_files:
-        print(f"No data files found in {dirname}")
+        print(f"No data files found in {dir_input}")
         sys.exit(1)
 
     if verbose:
-        print(f"Found {len(data_files)} data files in {dirname}")
+        print(f"Found {len(data_files)} data files in {dir_input}")
 
     ALL_DATA = None
     for file in sorted(data_files):
@@ -307,6 +340,35 @@ if __name__ == '__main__':
             if verbose:
                 print(f"Reading {file}...")
             file_data = read_tidal_data(file)
-            ALL_DATA = file_data if ALL_DATA is None else join_data(ALL_DATA, file_data)
+            ALL_DATA = (
+                file_data if ALL_DATA is None
+                else join_data(ALL_DATA, file_data)
+                )
         except (OSError, ValueError) as e:
             print(f"Error processing {file}: {e}")
+
+    if ALL_DATA is None or ALL_DATA.empty:
+        print("No valid data found in any of the files")
+        sys.exit(1)
+
+    slope_val, pval = sea_level_rise(ALL_DATA)
+    print(f"\nSea Level Rise Analysis for {dir_input}:")
+    print(f"Rate: {slope_val * 1000:.2f} mm/year (p-value: {pval:.4f})")
+
+    contig_data = get_longest_contiguous_data(ALL_DATA)
+    if contig_data.empty:
+        print("No contiguous data available for tidal analysis")
+    else:
+        tidal_names = ['M2', 'S2']
+        ref_time = contig_data.index[0].to_pydatetime().replace(tzinfo=pytz.UTC)
+        amp_out, phase_out = tidal_analysis(contig_data, tidal_names, ref_time)
+
+        if amp_out and phase_out:
+            print("\nTidal Analysis Results:")
+            for j, cname in enumerate(tidal_names):
+                print(
+                    f"{cname}: Amplitude = {amp_out[j]:.3f} m,"
+                    f"Phase = {phase_out[j]:.2f} radians"
+                    )
+        else:
+            print("Tidal analysis did not produce results")
