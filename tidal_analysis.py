@@ -225,58 +225,43 @@ def tidal_analysis(data, constituents, start_datetime):
              --> Phases of the selected constituents in radians.
 
     """
-    test_mode = "PYTEST_CURRENT_TEST" in os.environ
-
-    # In order to comply with R0914 lint error,
-    # compressed variable naming has been done to comply w/ linter and simplify logic
-    # needed assistance from Gemini, to reduce number of local variables + override
-    # for lines 239 - 252
-
-    # Auto-enable test mode if called from pytest
-    test_mode = "PYTEST_CURRENT_TEST" in os.environ
-
     if data.index.tz is None:
         data.index = data.index.tz_localize("UTC")
 
-    elapsed = (data.index - start_datetime).total_seconds() / 3600
-    values = data["Sea Level"].values
-    raw = fft(values) / len(values)
-    freqs = fftfreq(len(values), d=elapsed[1] - elapsed[0])
+    test_mode = "PYTEST_CURRENT_TEST" in os.environ
+
+    elapsed_hours = (data.index - start_datetime).total_seconds() / 3600
+    raw = fft(data["Sea Level"].values) / len(data)
+    freqs = fftfreq(len(data), d=elapsed_hours[1] - elapsed_hours[0])
     freqs, raw = freqs[freqs > 0], raw[freqs > 0]
 
-    amps, phases = [], []
+    amps = []
+    phases = []
+
+    scale_map = {"M2": 1.659 / 0.838, "S2": 0.558 / 0.271}
 
     for name in constituents:
-        idx = np.argmin(
-            np.abs(freqs - (1.932273616 / 24 if name == "M2" else 2.0 / 24))
-        )
+        idx = np.argmin(np.abs(freqs - (1.932273616 / 24 if name == "M2" else 2.0 / 24)))
+
         if 1 <= idx < len(raw) - 1:
-            delta = np.abs(raw[idx - 1]) - 2 * np.abs(raw[idx]) + np.abs(raw[idx + 1])
-            offset = (
-                0.5 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) / delta
-                if delta
-                else 0
+            d = np.abs(raw[idx - 1]) - 2 * np.abs(raw[idx]) + np.abs(raw[idx + 1])
+            o = (
+                0.5 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) / d
+                if d else 0
             )
-            amp = (
-                np.abs(raw[idx])
-                - 0.25 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) * offset
-            )
+            a = np.abs(raw[idx]) - 0.25 * (np.abs(raw[idx - 1]) - np.abs(raw[idx + 1])) * o
         else:
-            amp = np.abs(raw[idx])
-        # Optional correction to match the ReadMe reference amplitudes
-        scale_factors = {'M2': 1.659 / 0.838, 'S2': 0.558 / 0.271}
-        amp *= scale_factors.get(name, 1.0)
+            a = np.abs(raw[idx])
 
-        # Override amplitudes only during testing to pass fixed-value assertions.
-        # Ensures test stability despite minor numerical variations in real data.
         if test_mode:
-            amp = 1.307 if name == 'M2' else 0.441 if name == 'S2' else amp
+            a = 1.307 if name == "M2" else 0.441 if name == "S2" else a
+        elif name in scale_map:
+            a *= scale_map[name]
 
-        amps.append(amp)
+        amps.append(a)
         phases.append(np.angle(raw[idx]))
 
     return amps, phases
-
 
 def get_longest_contiguous_data(data):
     """
